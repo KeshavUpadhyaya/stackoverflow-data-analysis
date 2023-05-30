@@ -4,10 +4,10 @@ import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions
 from datasketch import HyperLogLog
 
-# Custom combine function for HyperLogLog
 ACCURACY = 14
 
 
+# Custom combine function for HyperLogLog
 class HyperLogLogCombineFn(beam.CombineFn):
     def create_accumulator(self):
         return HyperLogLog(p=ACCURACY)  # p is used to control accuracy, higher is more accuracy
