@@ -1,4 +1,5 @@
 import argparse
+import json
 
 import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions
@@ -6,6 +7,14 @@ from datasketch import HyperLogLog
 
 ACCURACY = 14
 
+class AddWindowInfo(beam.DoFn):
+    def process(self, x, window=beam.DoFn.WindowParam):
+        d = {}
+        d['count'] = x
+        d["window_start"] = window.start.to_utc_datetime()
+        d["window_end"] = window.end.to_utc_datetime()
+        print(d)
+        yield d
 
 # Custom combine function for HyperLogLog
 class HyperLogLogCombineFn(beam.CombineFn):
@@ -28,16 +37,17 @@ class HyperLogLogCombineFn(beam.CombineFn):
     def extract_output(self, accumulator):
         return accumulator.count()
 
+    def without_defaults(self):
+        return self
+
+
+def process_pubsub_message(element):
+    message_data = json.loads(element.decode('utf-8'))
+    print(message_data)
+    return message_data
+
 
 def run(argv=None):
-    # Define the query to retrieve the data
-    query = f"""
-        SELECT tags
-        FROM `bigquery-public-data.stackoverflow.posts_questions`
-        WHERE EXTRACT(YEAR FROM creation_date) BETWEEN 2008 AND 2009
-        LIMIT 1000
-    """
-
     # Create a Pipeline using Apache Beam
     parser = argparse.ArgumentParser()
     known_args, pipeline_args = parser.parse_known_args(argv)
@@ -45,19 +55,25 @@ def run(argv=None):
     pipeline_options = PipelineOptions(pipeline_args)
     pipeline = beam.Pipeline(options=pipeline_options)
 
-    data = (
+    # Read from Pub/Sub and process the messages
+    messages = (
             pipeline
-            | 'Read from BigQuery' >> beam.io.ReadFromBigQuery(query=query, use_standard_sql=True)
+            | 'Read from Pub/Sub' >> beam.io.ReadFromPubSub(subscription='projects/stream-processing-384807/subscriptions/stack-overflow-sub')
+            | 'Process Pub/Sub Messages' >> beam.Map(process_pubsub_message)
     )
 
     # Apply the HyperLogLog transform
     total_distinct_count = (
-            data
-            | beam.CombineGlobally(HyperLogLogCombineFn())
+            messages
+            | beam.WindowInto(beam.window.FixedWindows(60))  # Group the messages into 1-minute windows
+            | beam.CombineGlobally(HyperLogLogCombineFn()).without_defaults()
     )
 
-    # Output the total count of unique tags
-    total_distinct_count | beam.Map(print)
+    # Print the count of tags in each minute duration
+    def print_count(element):
+        print(element)
+
+    total_distinct_count | beam.ParDo(AddWindowInfo())
 
     # Execute the pipeline
     result = pipeline.run()
