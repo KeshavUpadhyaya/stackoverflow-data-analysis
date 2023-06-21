@@ -4,13 +4,17 @@ import json
 import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions
 from datasketch import HyperLogLog
+from apache_beam.io.gcp.bigquery import WriteToBigQuery
 
 ACCURACY = 14
+PROJECT_ID = 'stream-processing-384807'
+DATASET_ID = 'stackoverflow'
+TABLE_ID = 'unique-tag-count'
 
 class AddWindowInfo(beam.DoFn):
     def process(self, x, window=beam.DoFn.WindowParam):
         d = {}
-        d['count'] = x
+        d['count'] = float(x)
         d["window_start"] = window.start.to_utc_datetime()
         d["window_end"] = window.end.to_utc_datetime()
         print(d)
@@ -43,7 +47,6 @@ class HyperLogLogCombineFn(beam.CombineFn):
 
 def process_pubsub_message(element):
     message_data = json.loads(element.decode('utf-8'))
-    print(message_data)
     return message_data
 
 
@@ -57,23 +60,38 @@ def run(argv=None):
 
     # Read from Pub/Sub and process the messages
     messages = (
-            pipeline
-            | 'Read from Pub/Sub' >> beam.io.ReadFromPubSub(subscription='projects/stream-processing-384807/subscriptions/stack-overflow-sub')
-            | 'Process Pub/Sub Messages' >> beam.Map(process_pubsub_message)
+        pipeline
+        | 'Read from Pub/Sub' >> beam.io.ReadFromPubSub(subscription='projects/stream-processing-384807/subscriptions/stack-overflow-sub')
+        | 'Process Pub/Sub Messages' >> beam.Map(process_pubsub_message)
     )
 
     # Apply the HyperLogLog transform
     total_distinct_count = (
-            messages
-            | beam.WindowInto(beam.window.FixedWindows(60))  # Group the messages into 1-minute windows
-            | beam.CombineGlobally(HyperLogLogCombineFn()).without_defaults()
+        messages
+        | beam.WindowInto(beam.window.FixedWindows(60 * 30))  # Group the messages into 30-minute windows
+        | beam.CombineGlobally(HyperLogLogCombineFn()).without_defaults()
     )
 
-    # Print the count of tags in each minute duration
-    def print_count(element):
-        print(element)
+    # Convert the data to rows for writing to BigQuery
+    rows = total_distinct_count | beam.ParDo(AddWindowInfo())
 
-    total_distinct_count | beam.ParDo(AddWindowInfo())
+    # Write the data to BigQuery
+    table_schema = {
+        'fields': [
+            {'name': 'window_start', 'type': 'TIMESTAMP'},
+            {'name': 'window_end', 'type': 'TIMESTAMP'},
+            {'name': 'count', 'type': 'FLOAT64'}
+        ]
+    }
+
+    write_to_bq = WriteToBigQuery(
+        table=PROJECT_ID + ':' + DATASET_ID + '.' + TABLE_ID,
+        schema=table_schema,
+        write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
+        create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED
+    )
+
+    rows | 'Write to BigQuery' >> write_to_bq
 
     # Execute the pipeline
     result = pipeline.run()
