@@ -4,27 +4,25 @@ from datetime import datetime
 
 import apache_beam as beam
 from apache_beam.io.gcp.pubsub import ReadFromPubSub
+from apache_beam.io.gcp.bigquery import WriteToBigQuery
 from apache_beam.options.pipeline_options import PipelineOptions
-from apache_beam.transforms.window import TimestampedValue
+from apache_beam.transforms.window import FixedWindows, WindowInto
+from apache_beam.transforms.combiners import Count
 
-
-# assumption that data looks as follows: "creation_date,other_field_1,other_field_2,..."
 class ProcessMessages(beam.DoFn):
-    def process(element):
-        # Decode the PubSub message from bytes to string, and split the string
+    def process(self, element):
         message = element.decode('utf-8')
-        print(message)
-        # Extract the creation_date from the split message and convert to datetime
-        creation_date = datetime.strptime(message[0], "%Y-%m-%d %H:%M:%S")
+        print("Received message from PubSub: ", message)
+        message_data = json.loads(message)
+        message_data["creation_date"] = datetime.strptime(message_data["creation_date"], '%Y-%m-%dT%H:%M:%S.%f')
 
-        # Emit the creation_date as the timestamp and the entire message as the value
-        yield TimestampedValue(message, creation_date.timestamp())
+        yield message_data
 
 
-def process_pubsub_message(element):
-    message_data = json.loads(element.decode('utf-8'))
-    print(message_data)
-    return message_data
+class PrintToConsole(beam.DoFn):
+    def process(self, element):
+        print("Writing to BigQuery: ", element)
+        yield element
 
 
 def run(argv=None):
@@ -32,29 +30,21 @@ def run(argv=None):
     v,pipleline_args = parser.parse_known_args(argv)
     pipeline_options = PipelineOptions(pipleline_args)
 
-    # Create a pipeline
     with beam.Pipeline(options=pipeline_options) as pipeline:
-        # Read from PubSub
         pubsub_data = (
-                pipeline
-                | 'Read from PubSub' >> ReadFromPubSub(subscription="projects/streamproc-python-lab/subscriptions/streamProc-StackOverflow-sub")
-                | 'Process messages' >> beam.Map(process_pubsub_message)
-            #                | 'Window' >> beam.WindowInto(FixedWindows(60 * 60),  # 1 hour windows
-            #                                              trigger=AfterWatermark(early=AfterProcessingTime(1 * 60)),
-            #                                              # Fire early every minute
-            #                                              accumulation_mode=AccumulationMode.ACCUMULATING)  # Include late data in the next result
-            #                | 'Count messages per window' >> Count.PerElement()
+            pipeline
+            | 'Read from PubSub' >> ReadFromPubSub(subscription="projects/streamproc-python-lab/subscriptions/streamProc-StackOverflow-sub")
+            | 'Process messages' >> beam.ParDo(ProcessMessages())
+            | 'Assign to windows' >> WindowInto(FixedWindows(60))
+            | 'Count messages in each window' >> Count.Globally().without_defaults()
+            | 'Format for BigQuery' >> beam.Map(lambda count: {'window_count': count})
+            | 'Print to console' >> beam.ParDo(PrintToConsole())
+            | 'Write to BigQuery' >> WriteToBigQuery(
+                table="your_project_id:your_dataset.your_table_name",
+                schema='window_count:INTEGER',
+                write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
+                create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED)
         )
-
-
-# The data list now contains the grouped data.
-# We'll plot a histogram of the number of elements per group (i.e., per window).
-# timestamps, counts = zip(*data)
-
-# fig, ax = plt.subplots()
-# ax.bar(timestamps, counts)
-# plt.xticks(rotation=90, fontsize=4)  # Rotate x-axis labels for readability
-# plt.show()
 
 if __name__ == '__main__':
     run()
