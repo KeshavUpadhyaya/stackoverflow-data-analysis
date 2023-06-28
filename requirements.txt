@@ -71,3 +71,5 @@ urllib3==1.26.16
 yarg==0.1.9
 zipp==3.15.0
 zstandard==0.21.0
+
+textblob~=0.17.1
