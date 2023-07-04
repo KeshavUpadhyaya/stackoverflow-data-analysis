@@ -26,7 +26,7 @@ def run_sentiment_analysis(input_text):
         sentiment_scores = text_data | beam.ParDo(SentimentAnalysis())
 
         # Write the sentiment scores to a file
-        sentiment_scores | beam.io.WriteToText('sentiment_scores.txt')
+        sentiment_scores | beam.io.WriteToText('sentiment_scores')
 
 if __name__ == '__main__':
     input_text = [
