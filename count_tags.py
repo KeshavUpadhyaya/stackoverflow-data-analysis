@@ -44,9 +44,6 @@ class HyperLogLogCombineFn(beam.CombineFn):
     def extract_output(self, accumulator):
         return accumulator.count()
 
-    def without_defaults(self):
-        return self
-
 
 def process_pubsub_message(element):
     message_data = json.loads(element.decode('utf-8'))
