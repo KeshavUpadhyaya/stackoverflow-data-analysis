@@ -9,15 +9,21 @@ from collections import Counter
 options = PipelineOptions()
 p = beam.Pipeline(options=options)
 
+def log(element):
+    print(element)
+    return element
+
 data_posts = (
         p
         | 'Read from Pub/Sub Posts' >> beam.io.ReadFromPubSub(
     subscription='projects/streamproc-python-lab/subscriptions/TestTopic-sub')
         | "Parse Posts" >> beam.Map(lambda x: (json.loads(x.decode('utf-8'))['id'], json.loads(x.decode('utf-8'))))
-        | 'Assign votes to fixed window1' >> beam.WindowInto(beam.window.FixedWindows(60 * 60),
-                                                    trigger=AfterWatermark(early=AfterProcessingTime(5)),
+        | 'Assign votes to fixed window' >> beam.WindowInto(beam.window.FixedWindows(60 * 60),
+                                                    trigger=AfterWatermark(early=AfterProcessingTime(10)),
                                                     allowed_lateness=100,
                                                     accumulation_mode=AccumulationMode.ACCUMULATING)
+        | "Map data2" >> beam.Map(log)
+
 )
 
 data_votes = (
@@ -27,29 +33,18 @@ data_votes = (
         | "Parse Votes" >> beam.Map(
     lambda x: (json.loads(x.decode('utf-8'))['post_id'], json.loads(x.decode('utf-8'))))
         | 'Assign posts to fixed window' >> beam.WindowInto(beam.window.FixedWindows(60 * 60),
-                                                    trigger=AfterWatermark(early=AfterProcessingTime(5)),
+                                                    trigger=AfterWatermark(early=AfterProcessingTime(10)),
                                                     allowed_lateness=100,
                                                     accumulation_mode=AccumulationMode.ACCUMULATING)
-)
+        | "Map data1" >> beam.Map(log)
 
-# Convert JSON strings to dictionaries
-#parsed_posts = data_posts | "Parse Posts" >> beam.Map(
-#    lambda x: (json.loads(x.decode('utf-8'))['id'], json.loads(x.decode('utf-8'))))
-#parsed_votes = data_votes | "Parse Votes" >> beam.Map(
-#    lambda x: (json.loads(x.decode('utf-8'))['post_id'], json.loads(x.decode('utf-8'))))
+)
 
 joined_data = (
         {"posts": data_posts, "votes": data_votes}
         | "Join Data" >> beam.CoGroupByKey()
+        | "Map data" >> beam.Map(log)
 )
-
-# Assign windows to the pipeline
-#windowed_data = joined_data | 'Assign fixed window' >> beam.WindowInto(FixedWindows(60 * 60),
-#                                                                       trigger=AfterWatermark(
-#                                                                           early=AfterProcessingTime(5)),
-#                                                                       allowed_lateness=10,
-#                                                                       accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING)
-
 
 def format_votes(element):
     id, data = element
