@@ -1,0 +1,5 @@
+('positive', 'I love Java!')
+('negative', 'I feel sad.')
+('neutral', 'The API is not working!')
+('negative', 'Python is horrible!')
+('neutral', 'I got an error message.')

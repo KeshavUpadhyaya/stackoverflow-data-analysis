@@ -3,6 +3,7 @@ import json
 
 import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions
+from apache_beam.transforms.trigger import AfterWatermark, AfterCount, AccumulationMode, AfterProcessingTime
 from datasketch import HyperLogLog
 from apache_beam.io.gcp.bigquery import WriteToBigQuery
 
@@ -10,6 +11,7 @@ ACCURACY = 14
 PROJECT_ID = 'stream-processing-384807'
 DATASET_ID = 'stackoverflow'
 TABLE_ID = 'unique-tag-count'
+
 
 class AddWindowInfo(beam.DoFn):
     def process(self, x, window=beam.DoFn.WindowParam):
@@ -19,6 +21,7 @@ class AddWindowInfo(beam.DoFn):
         d["window_end"] = window.end.to_utc_datetime()
         print(d)
         yield d
+
 
 # Custom combine function for HyperLogLog
 class HyperLogLogCombineFn(beam.CombineFn):
@@ -60,16 +63,19 @@ def run(argv=None):
 
     # Read from Pub/Sub and process the messages
     messages = (
-        pipeline
-        | 'Read from Pub/Sub' >> beam.io.ReadFromPubSub(subscription='projects/stream-processing-384807/subscriptions/stack-overflow-sub')
-        | 'Process Pub/Sub Messages' >> beam.Map(process_pubsub_message)
+            pipeline
+            | 'Read from Pub/Sub' >> beam.io.ReadFromPubSub(
+        subscription='projects/stream-processing-384807/subscriptions/stack-overflow-sub')
+            | 'Process Pub/Sub Messages' >> beam.Map(process_pubsub_message)
     )
 
     # Apply the HyperLogLog transform
     total_distinct_count = (
-        messages
-        | beam.WindowInto(beam.window.FixedWindows(60 * 30))  # Group the messages into 30-minute windows
-        | beam.CombineGlobally(HyperLogLogCombineFn()).without_defaults()
+            messages
+            | beam.WindowInto(beam.window.FixedWindows(60 * 5),
+                              accumulation_mode=AccumulationMode.ACCUMULATING)
+            # Group the messages into 5-minute  windows
+            | beam.CombineGlobally(HyperLogLogCombineFn()).without_defaults()
     )
 
     # Convert the data to rows for writing to BigQuery
