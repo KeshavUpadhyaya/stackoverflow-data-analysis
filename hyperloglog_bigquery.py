@@ -28,7 +28,6 @@ class HyperLogLogCombineFn(beam.CombineFn):
     def extract_output(self, accumulator):
         return accumulator.count()
 
-
 def run(argv=None):
     # Define the query to retrieve the data
     query = f"""
@@ -45,18 +44,29 @@ def run(argv=None):
     pipeline = beam.Pipeline(options=pipeline_options)
 
     data = (
-            pipeline
-            | 'Read from BigQuery' >> beam.io.ReadFromBigQuery(query=query, use_standard_sql=True)
+        pipeline
+        | 'Read from BigQuery' >> beam.io.ReadFromBigQuery(query=query, use_standard_sql=True)
     )
 
     # Apply the HyperLogLog transform
     total_distinct_count = (
-            data
-            | beam.CombineGlobally(HyperLogLogCombineFn())
+        data
+        | 'Compute Unique Tags (HyperLogLog)' >> beam.CombineGlobally(HyperLogLogCombineFn())
     )
 
-    # Output the total count of unique tags
-    total_distinct_count | beam.Map(print)
+    # Output the total count of unique tags using HyperLogLog estimate
+    total_distinct_count | 'Print HyperLogLog Estimate' >> beam.Map(print)
+
+    # Compute the actual total number of unique tags
+    actual_distinct_count = (
+        data
+        | 'Split Tags' >> beam.FlatMap(lambda element: element['tags'].split('|') if element['tags'] else [])
+        | 'Remove Duplicates' >> beam.Distinct()
+        | 'Count Unique Tags' >> beam.combiners.Count.Globally()
+    )
+
+    # Output the actual total count of unique tags
+    actual_distinct_count | 'Print Actual Unique Count' >> beam.Map(print)
 
     # Execute the pipeline
     result = pipeline.run()
