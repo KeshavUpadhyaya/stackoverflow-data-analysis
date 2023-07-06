@@ -69,8 +69,7 @@ def run(argv=None):
     # Apply the HyperLogLog transform
     total_distinct_count = (
             messages
-            | beam.WindowInto(beam.window.FixedWindows(60 * 5),
-                              accumulation_mode=AccumulationMode.ACCUMULATING)
+            | beam.WindowInto(beam.window.FixedWindows(60 * 5))
             # Group the messages into 5-minute  windows
             | beam.CombineGlobally(HyperLogLogCombineFn()).without_defaults()
     )
